@@ -1,26 +1,258 @@
----
-title: "EDA buscas"
-output: html_notebook
----
-
-O objeto principal da análise são as buscas e a navegação depois da busca. Criamos esses dados a partir dos dados originais da wikimedia em `/data/search_data.csv`. 
-
-Aqui, exploramos esses dados. 
 
 ```{r setup}
 library(tidyverse)
 library(here)
 library(lubridate)
+library(reshape2)
+library(gridExtra) 
+library(grid)
 theme_set(theme_bw())
 ```
 
 ```{r ETL}
-buscas = read_csv(here::here("data/search_data.csv"))
+buscas = read_csv(here::here("data/search_data.csv")) %>%
+    mutate(day = round_date(session_start_date, unit = "day")) %>% 
+        mutate(clicks = ifelse(num_clicks>0,1,0)) %>%
+            mutate(zero_clicks = ifelse(results==0,1,0))
+
 ```
+#Distribuições 
+
+De início, antes de qualquer resposta aos questionamentos, faz-se necessário analisar algumas questões dos dados em geral. Primeiramente notamos a quantidade de sessões que ocorrem em cada grupo, notando uma diferença, onde o grupo B apresenta mais sessões em relação ao A. Os pontos dos dados também mostram distinções, analisando 3 variaveis distintas(resultados, primeiro click e numero de clicks) nota-se que existe uma dispersão maior no dados do grupo A em todas as variavéis analisadas, além de possíveis outliers como é o caso do primeiro click.
+
 
 ```{r}
-buscas %>% 
-    ggplot(aes(x = results)) + 
-    geom_histogram(binwidth = 5) 
+
+buscas %>%
+   distinct(session_id, .keep_all=TRUE) %>%
+ggplot() + 
+  geom_bar(mapping = aes(x = group), stat = "count")  + labs(y="Número de Grupos", x="") 
+
+
 ```
+
+
+```{r}
+
+pontos_clicks = buscas %>%
+    ggplot(aes(x = group, y = num_clicks)) + geom_jitter (color = "darkblue")  + xlab("Grupos") + ylab("Número de Clicks")
+
+pontos_resultados = buscas %>%
+    ggplot(aes(x = group, y = results)) + geom_jitter (color = "darkgreen")  +  xlab("Grupos") + ylab("Resultados")
+
+pontos_primeiro_click = buscas %>%
+    ggplot(aes(x = group, y = first_click)) + geom_jitter (color = "salmon")  +  xlab("Grupos") + ylab("Primeiro CLick")
+
+
+grid.arrange(pontos_clicks,pontos_resultados,pontos_primeiro_click, ncol = 3 ) 
+
+```
+
+
+
+
+
+
+
+```{r}
+
+
+density_numero = buscas %>% 
+    ggplot(aes(x = num_clicks)) + 
+    geom_density(fill = "blue") + xlab("Número de Clicks") + ylab("Densidade")
+
+
+density_resultados = buscas %>% 
+    ggplot(aes(x = results)) + 
+    geom_density(fill = "salmon") + xlab("Resultados") + ylab("Densidade")
+
+density_first_click = buscas %>%
+    ggplot(aes(x = first_click)) + 
+    geom_density(alpha = .4)
+
+grid.arrange(density_numero, density_resultados,density_first_click, ncol = 3)
+
+```
+
+
+
+
+
+
+
+#Questão 1
+
+A primeira questão infere sobre a taxa de click diária. Tal taxa é calculada pela proporção entre a soma de clicks feitas em um dia, e a quantidade de sessões ocorridas nesse mesmo dia. Vale salientar que a quantidade de clicks é definida, pela existencia ou não de algum click em um determinado resultado naquela sessão, ou seja, se em numa sessão o usuário entrou em alguma página considerasse que naquela sessão houve pelo menos um click, não importando se isso ocorreu apenas uma vez, ou aconteceu n vezes. 
+
+O gráfico de pontos, apresentado abaixo, aponta para a taxa de clicks diária sem distinção de grupos, nota-se que tal taxa apresenta variação ao longo dos dias, entretanto tal variação é pequena, no qual os valores giram em torno de 37% e 39%.
+
+```{r}
+
+taxa_click = buscas %>%
+    group_by(session_id)%>%                      #divisão por sessão
+        summarise(click = max(clicks),         #quantidade de buscas e soma de clicks feitos
+                  day = max(day),                                     #dia da sessão        #calcula da taxa 
+                  group = max(group)                               #grupo da sessão
+                  )
+
+
+taxa_click_all = taxa_click  %>%
+    group_by(day) %>%
+    summarise(proporcao = sum(click/length(session_id)))
+
+
+taxa_click_all %>%
+    ggplot(aes(x = day,y = proporcao*100)) + 
+      geom_point (color = "green") + ylim (30,40)+ geom_line() + xlab ("Dia") + ylab("Taxa de Clicks (%)")
+ 
+
+```
+
+No comparativo por grupo, apresentado no gráfico em barras abaixo, nota-se uma grande diferença entre a taxa de clicks do grupo A em relação ao grupo B. Apesar de nos grupos específicos a taxa diaria por dia apresente uma variação baixa, a diferença entre os grupos é considerável. Enquanto o grupo A ultrapassa a porcentagem de 60% da taxa de clicks, o grupo B não cruza a linha dos 20%, apontando assim ao fato de que com o grupo B menos resultados foram satisfatórios ao ponto do usuário clicar em alguma página.
+
+```{r}
+
+taxa_click_a = taxa_click  %>%
+    filter (group == "a") %>% 
+    group_by(day) %>%
+    summarise(proporcao = sum(click/length(session_id)),
+              grupo = max(group))
+
+taxa_click_b = taxa_click  %>%
+    filter (group == "b") %>% 
+    group_by(day) %>%
+    summarise(proporcao = sum(click/length(session_id)),
+              grupo = max(group))
+
+click_rate_all <- rbind(taxa_click_a,taxa_click_b) 
+
+click_rate_all %>%
+ggplot(aes(x = day,y = proporcao*100)) + 
+    geom_bar(aes(fill = grupo),stat = "identity",position = "dodge", width = 40000) + ylim (0,75) + xlab ("Dia") + ylab("Taxa de Clicks (%)")
+
+```
+
+
+#Questão 2
+
+A segunda questão trata sobre o primeiro resultado acessado por um usuário, ou seja, dada as páginas retornadas das buscas, os usuários tendem a clicar mais em quais valores. Para analisar tal questão, primeiro é necessário analisar como se distribui os dados de primeiro click. Para isso nota-se o histograma apresentado abaixo que os dados se concentram mais próximos ao zero, percebe-se também que existem valores em pontos mais distantes, como em valores que ultrapassam ao valor 1000 e casos que chegam até a 4000, tais valores tem caracteristicas claras de outlier. Para ainda auxiliar na resposta da pergunta, a tabela posterior, aponta alguns valores sobre tais dados, nota-se que a mediana dos dados ou seja qual a opção mais acessada entre sua grande maioria, aponta para um acesso maior no primeiro resultado apresentado na busca.  
+
+```{r}
+primeiro_click =  buscas %>%
+    filter(!is.na(first_click)) 
+
+primeiro_click %>% 
+    ggplot(aes(x = first_click)) +
+    geom_histogram(bins = 30, boundary=0, fill = "white", color = "green")  + geom_rug(alpha = .3) + labs(y="Frequência", x="Primeiro Click") 
+
+primeiro_click  %>% 
+summarise(Media = mean(first_click, na.rm=TRUE),
+           Mediana = median(first_click, na.rm=TRUE),DesvioPadrao = sd(first_click, na.rm=TRUE))
+
+```
+
+Quando se analisa a diferença entre os dados por dia, nota-se que em todos os dias a caracteristica geral se mantém, ou seja 50% dos usuários clicam no primeiro resultado da busca realizada, mantendo-se igual até o terceiro quartil, ou seja 75% dos dados se comportam de forma concordante. A variação ocorre apartir do terceiro quartil onde se concentra os ultimos 25% dos dados, notando-se uma maior disparidade em determinados dias como é o caso do dia 4 de março, apresentando acesso a resultados mais distantes. 
+
+```{r}
+
+primeiro_click %>%
+    filter(first_click < 1000) %>%
+   ggplot(aes(x = day, y = first_click, group = day)) + 
+    geom_boxplot(color="black",fill="white", outlier.colour = NA, coef = 1000) + geom_jitter(
+        
+        width = 0.5,
+        alpha = .4,
+        size = 1,
+        color = "green") + scale_y_log10()
+
+
+
+```
+
+
+
+
+
+#Questao 3 
+
+A terceira questão trata sobre a taxa de zero clicks diarias, ou seja dado todas as buscas feitas em um dia quantas vezes os usuários  decidiram não acessar nenhum dos resultados apontados. Tal taxa é calculada pela proporção da soma de "não clicks" feitas em um dia e a quantidade de buscas ocorridas nesse mesmo dia. O gráfico em barras apresentado abaixo, mostra uma variação entre os dias, porém tal diferança é pequena, fazendo com que os dados fiquem em torno os 17% e 20%.
+
+```{r}
+
+zero_taxa = buscas %>%
+    group_by(day)%>%
+        summarise(quantidade_buscas = length(search_index), click = sum(zero_clicks),
+                  proporcao = (click/quantidade_buscas)*100
+                  )
+
+zero_taxa %>%
+    ggplot(aes(x = day,y = proporcao)) + 
+        geom_bar(stat = "identity", width = 30000) + ylim (0,30) + xlab ("Dia") + ylab("Taxa de Zero Clicks (%)")
+```
+
+No comparativo entre os grupos, não se pode determinar qual grupo possuiu uma taxa maior de zero clicks, visto que existe uma variações para cada dia especifico, onde em alguns casos o grupo A é maior, e outros casos a taxa do grupo B é maior. Entretanto os resultados se mantém na mesma faixa apresentada nos dados em geral, entre os 17% e 20%.
+
+```{r}
+
+
+zero_taxa_a = buscas %>%
+    filter (group == "a") %>%
+    group_by(day)%>%
+        summarise(quantidade_buscas = length(search_index), click = sum(zero_clicks),
+                  proporcao = (click/quantidade_buscas)*100,
+                  grupo = max(group)
+                  
+                  )
+
+zero_taxa_b = buscas %>%
+    filter (group == "b") %>%
+    group_by(day)%>%
+        summarise(quantidade_buscas = length(search_index), click = sum(zero_clicks),
+                  proporcao = (click/quantidade_buscas)*100,
+                  grupo = max(group)
+                  )
+
+    
+
+
+click_zero_rate_all <- rbind(zero_taxa_a,zero_taxa_b) 
+
+click_zero_rate_all %>%
+ggplot(aes(x = day, y = proporcao)) + 
+    geom_bar(aes(fill = grupo),stat = "identity",position = "dodge", width = 40000) + ylim (0,30) + xlab ("Dia") + ylab("Taxa de Zero Clicks (%)")
+
+
+
+
+
+```
+
+#Questão4 
+A ultima questão trata sobre a relação de alguma variavel com a session length, ou seja com o tamanho da sessão, ou o tempo entre uma sessão ser iniciada e fechada. A variavel escolhida foi a "results", ou seja os resultados que apareceram para o usuário após sua busca, nesse caso o intuito é analisar se um usuário com mais opções de acesso demoraria mais numa sessão ou não. Para isso o gráfico de pontos mostra a distribuição dos dados em relação a essas duas variáveis. Para avaliar tal relação, analisamos os coeficientes de correlação de pearson, spearman e  kendall. Como a propria visualização da distribuição aponta, a relação dos dados não é linear, sendo assim o coeficiente de pearson apresenta um coeficiente bem abaixo. No dados dos outros dois coeficientes há uma divergencia, o coeficiente de spearman aponta para uma correlação positiva moderada e o coeficiente de kendall uma correlação fraca. No geral podemos apontar, que existe uma relação entre as variaveis, porém essa realação não é tão significativa.
+
+```{r}
+tempo_sessao = buscas %>%
+    group_by(session_id)%>%
+        summarise(session_length = max(session_length), num_clicks = sum(num_clicks), resultados = sum(results)
+                  )
+
+    
+tempo_sessao %>%
+    ggplot(aes(x = session_length, y = resultados)) + geom_point(color = "darkgreen") + xlab("Resultados por Sessão") + ylab("Clicks por Sessão")
+
+```
+```{r}
+
+
+tempo_sessao %>%
+
+    summarise(
+    pearson = cor(session_length, resultados, method = "pearson"), 
+    spearman = cor(session_length, resultados, method = "spearman"), 
+    kendall = cor(session_length, resultados, method = "kendall")
+  )
+
+
+```
+
 
